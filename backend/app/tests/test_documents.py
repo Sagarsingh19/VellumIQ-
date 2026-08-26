@@ -367,3 +367,148 @@ async def test_validation_failure_and_review_required(client: AsyncClient, db_se
     ext_data = ext_res.json()
     # Initial 0.95 - 0.40 arithmetic deduction = 0.55 confidence score for total fields
     assert ext_data["field_confidence"]["total_amount"] == 0.55
+
+
+async def test_document_human_review_success(client: AsyncClient, db_session: AsyncSession):
+    # 1. Setup user and organization
+    user_data = await create_test_user_and_headers(client, "reviewer@example.com")
+    org_id = await get_user_organization(db_session, user_data["user_id"])
+    
+    # 2. Generate a mathematically incorrect PDF
+    import fitz
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page()
+    page.insert_text((50, 50), "Vendor: Acme Corp")
+    page.insert_text((50, 100), "Invoice Number: INV-101")
+    page.insert_text((50, 120), "Invoice Date: 2026-08-25")
+    page.insert_text((50, 140), "Subtotal: 1000.00")
+    page.insert_text((50, 160), "Tax: 100.00")
+    page.insert_text((50, 180), "Total: 1500.00")  # Invalid math!
+    file_content = pdf_doc.write()
+    pdf_doc.close()
+    
+    # 3. Upload file ( Celery executes synchronously, transitions to REVIEW_REQUIRED)
+    files = {"file": ("invoice_to_review.pdf", file_content, "application/pdf")}
+    upload_res = await client.post(
+        f"/api/v1/documents?organization_id={org_id}",
+        files=files,
+        headers=user_data["headers"]
+    )
+    doc_id = upload_res.json()["document_id"]
+    
+    # Verify status is REVIEW_REQUIRED
+    doc_res = await client.get(
+        f"/api/v1/documents/{doc_id}",
+        headers=user_data["headers"]
+    )
+    assert doc_res.json()["status"] == "REVIEW_REQUIRED"
+    
+    # 4. Construct human corrected review submission fields: 1000 subtotal + 100 tax = 1100 total (valid!)
+    submission_data = {
+        "corrected_fields": {
+            "vendor_name": "Acme Corp",
+            "vendor_address": "123 Industrial Way, Tech City",
+            "invoice_number": "INV-101",
+            "invoice_date": "2026-08-25",
+            "due_date": "2026-09-25",
+            "currency": "USD",
+            "subtotal": 1000.00,
+            "tax_amount": 100.00,
+            "discount_amount": 0.0,
+            "total_amount": 1100.00,  # Corrected Grand Total!
+            "line_items": []
+        }
+    }
+    
+    # 5. POST review corrections
+    response = await client.post(
+        f"/api/v1/documents/{doc_id}/review",
+        json=submission_data,
+        headers=user_data["headers"]
+    )
+    assert response.status_code == 200
+    review_res = response.json()
+    assert review_res["status"] == "success"
+    assert review_res["document_status"] == "COMPLETED"
+    assert review_res["is_valid"] is True
+    
+    # 6. Fetch extraction to verify totals are corrected and confidence is set to 1.0 (human verified)
+    ext_res = await client.get(
+        f"/api/v1/documents/{doc_id}/extraction",
+        headers=user_data["headers"]
+    )
+    ext_data = ext_res.json()
+    assert ext_data["extracted_fields"]["total_amount"] == 1100.0
+    assert ext_data["field_confidence"]["total_amount"] == 1.0
+    
+    # 7. Fetch validation results to verify is_valid is now True
+    val_res = await client.get(
+        f"/api/v1/documents/{doc_id}/validation",
+        headers=user_data["headers"]
+    )
+    assert val_res.json()["is_valid"] is True
+    assert len(val_res.json()["validation_errors"]) == 0
+    
+    # 8. Check audit_logs and reviews tables programmatically in DB
+    from app.models.review import Review
+    from app.models.audit_log import AuditLog
+    from sqlalchemy.future import select
+    
+    # Use standard DB execution
+    reviews_result = await db_session.execute(
+        select(Review).where(Review.document_id == uuid.UUID(doc_id))
+    )
+    db_review = reviews_result.scalars().first()
+    assert db_review is not None
+    assert db_review.original_fields["total_amount"] == 1500.0
+    assert db_review.corrected_fields["total_amount"] == 1100.0
+    assert db_review.status == "COMPLETED"
+    
+    audits_result = await db_session.execute(
+        select(AuditLog).where(AuditLog.entity_id == uuid.UUID(doc_id))
+    )
+    db_audit = audits_result.scalars().first()
+    assert db_audit is not None
+    assert db_audit.action == "DOCUMENT_REVIEWED"
+
+
+async def test_document_human_review_tenant_isolation(client: AsyncClient, db_session: AsyncSession):
+    # User A uploads a document
+    user_a = await create_test_user_and_headers(client, "usera_review@example.com")
+    org_a = await get_user_organization(db_session, user_a["user_id"])
+    
+    import fitz
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page()
+    page.insert_text((50, 50), "Invoice Number: INV-9")
+    file_content = pdf_doc.write()
+    pdf_doc.close()
+    
+    files = {"file": ("usera_inv.pdf", file_content, "application/pdf")}
+    upload_res = await client.post(
+        f"/api/v1/documents?organization_id={org_a}",
+        files=files,
+        headers=user_a["headers"]
+    )
+    doc_id = upload_res.json()["document_id"]
+    
+    # User B logs in and tries to submit review corrections for User A's document
+    user_b = await create_test_user_and_headers(client, "userb_review@example.com")
+    submission_data = {
+        "corrected_fields": {
+            "vendor_name": "Acme Corp",
+            "invoice_number": "INV-9",
+            "subtotal": 100.00,
+            "total_amount": 100.00,
+            "line_items": []
+        }
+    }
+    
+    response = await client.post(
+        f"/api/v1/documents/{doc_id}/review",
+        json=submission_data,
+        headers=user_b["headers"]
+    )
+    # Enforces strict isolation checks
+    assert response.status_code == 403
+    assert "not a member" in response.json()["detail"]

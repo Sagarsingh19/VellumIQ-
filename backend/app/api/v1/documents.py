@@ -1,8 +1,11 @@
+import logging
 import os
 import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
 from fastapi.responses import FileResponse
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -13,6 +16,7 @@ from app.api.deps import get_current_user, get_current_organization_membership
 from app.models.user import User
 from app.models.document import Document
 from app.models.membership import Membership
+from app.schemas.review import ReviewSubmission
 from app.tasks.document import process_document_task
 
 router = APIRouter()
@@ -249,4 +253,106 @@ async def get_document_validation(
         "is_valid": validation.is_valid,
         "validation_errors": validation.validation_errors,
         "created_at": validation.created_at,
+    }
+
+
+@router.post("/{document_id}/review")
+async def review_document(
+    document_id: uuid.UUID,
+    review_submission: ReviewSubmission,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Submits human corrections for an invoice, updates extraction/validation schemas, and transitions document status."""
+    # 1. Fetch document metadata
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    document = result.scalars().first()
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found."
+        )
+
+    # 2. Enforce strict multi-tenant isolation
+    await get_current_organization_membership(
+        organization_id=document.organization_id, db=db, current_user=current_user
+    )
+
+    # 3. Retrieve original extraction results
+    from app.models.extraction_result import ExtractionResult
+    ext_result = await db.execute(
+        select(ExtractionResult).where(ExtractionResult.document_id == document_id)
+    )
+    extraction = ext_result.scalars().first()
+    if not extraction:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Extraction results not found for this document."
+        )
+
+    original_fields = extraction.extracted_fields
+    corrected_dict = review_submission.corrected_fields.model_dump(mode="json")
+
+    # 4. Save review log record
+    from app.models.review import Review
+    from datetime import datetime, timezone
+    
+    review_log = Review(
+        document_id=document_id,
+        reviewed_by_id=current_user.id,
+        original_fields=original_fields,
+        corrected_fields=corrected_dict,
+        status="COMPLETED",
+        completed_at=datetime.now(timezone.utc),
+    )
+    db.add(review_log)
+
+    # 5. Overwrite the extraction result with the human corrected data
+    extraction.extracted_fields = corrected_dict
+    # Set all corrected field confidence ratings to 1.0 (since verified by a human!)
+    extraction.field_confidence = {key: 1.0 for key in corrected_dict.keys() if corrected_dict[key] is not None}
+    db.add(extraction)
+
+    # 6. Re-run validations based on corrected data
+    from app.services.validation import InvoiceValidationEngine
+    from app.models.validation_result import ValidationResult
+    
+    validation_output = InvoiceValidationEngine.validate(review_submission.corrected_fields)
+    
+    # Update validation result record in database
+    val_result = await db.execute(
+        select(ValidationResult).where(ValidationResult.document_id == document_id)
+    )
+    validation = val_result.scalars().first()
+    if validation:
+        validation.is_valid = validation_output.is_valid
+        validation.validation_errors = [err.model_dump() for err in validation_output.errors]
+        db.add(validation)
+
+    # 7. Create Audit Log entry
+    from app.models.audit_log import AuditLog
+    audit = AuditLog(
+        organization_id=document.organization_id,
+        user_id=current_user.id,
+        action="DOCUMENT_REVIEWED",
+        entity_type="document",
+        entity_id=document_id,
+        details={
+            "original_fields": original_fields,
+            "corrected_fields": corrected_dict
+        }
+    )
+    db.add(audit)
+
+    # 8. Update Document status to COMPLETED (since reviewed by human)
+    document.status = "COMPLETED"
+    db.add(document)
+
+    await db.commit()
+    logger.info(f"Document {document_id} successfully reviewed and approved by user {current_user.id}")
+
+    return {
+        "status": "success",
+        "document_status": document.status,
+        "is_valid": validation_output.is_valid,
     }

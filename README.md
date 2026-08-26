@@ -13,7 +13,10 @@ It is built as a commercial-ready SaaS architecture rather than a simple LLM wra
 - **Modular Object Storage Abstraction**: Supports S3-compliant providers (e.g. AWS S3, MinIO) in production while falling back seamlessly to a local directory backend (`storage_local/`) for quick offline development onboarding.
 - **High-Fidelity OCR Engine**: Integrates a layout-aware PDF parser (using `pdfplumber`) that reconstructs horizontal word baselines, sequences reading order, and extracts coordinate-level bounding boxes.
 - **Pre-processing Rasterizer**: Converts PDF pages programmatically at 150 DPI into clean PNG page images (using `PyMuPDF`) for rendering coordinate highlights on the front-end.
-- **Testing Portability**: Zero-config test suite runs fully on an in-memory SQLite setup using dedicated drop/create test database tables, verifying auth scopes and end-to-end task pipelines.
+- **Deterministic Math & Validation Checks**: Implements programmatic rules confirming grand totals (`subtotal + tax - discount == total` with rounding tolerance), date order, and line-item math checks.
+- **Multi-Signal Confidence Engine**: Calculates overall document and field-level confidence scores based on OCR word coordinates and validation math results. Low scores (<0.85) or invalid math route files automatically to `REVIEW_REQUIRED`.
+- **Human-in-the-Loop Review Panel**: Exposes routes (`POST /review`) enabling human correction of parsed fields. Submissions overwrite extractions, reset field confidence metrics to `1.0`, trigger validation checks, and log detailed entries to the `reviews` and `audit_logs` history tables.
+- **Testing Portability**: Zero-config test suite runs fully on an in-memory SQLite setup using dedicated drop/create test database tables, verifying auth scopes, VLM parsing results, math checks, and human overrides.
 
 ---
 
