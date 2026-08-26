@@ -111,17 +111,17 @@ class GeminiVLMExtractor(BaseVLMExtractor):
             data["vendor_name"] = vendor_match.group(1).strip()
 
         # 3. Parse Totals
-        subtotal_match = re.search(r"Subtotal:\s*(\d+\.?\d*)", ocr_text, re.IGNORECASE)
+        subtotal_match = re.search(r"\bSubtotal:\s*(\d+\.?\d*)", ocr_text, re.IGNORECASE)
         if subtotal_match:
             data["subtotal"] = float(subtotal_match.group(1))
 
-        tax_match = re.search(r"Tax(?:\s*\(?\d*%\)?)?:\s*(\d+\.?\d*)", ocr_text, re.IGNORECASE)
+        tax_match = re.search(r"\bTax(?:\s*\(?\d*%\)?)?:\s*(\d+\.?\d*)", ocr_text, re.IGNORECASE)
         if tax_match:
             data["tax_amount"] = float(tax_match.group(1))
 
-        total_match = re.search(r"Total\s*Due:\s*(\d+\.?\d*)", ocr_text, re.IGNORECASE)
+        total_match = re.search(r"\bTotal\s*Due:\s*(\d+\.?\d*)", ocr_text, re.IGNORECASE)
         if not total_match:
-            total_match = re.search(r"Total:\s*(\d+\.?\d*)", ocr_text, re.IGNORECASE)
+            total_match = re.search(r"\bTotal:\s*(\d+\.?\d*)", ocr_text, re.IGNORECASE)
         if total_match:
             data["total_amount"] = float(total_match.group(1))
 

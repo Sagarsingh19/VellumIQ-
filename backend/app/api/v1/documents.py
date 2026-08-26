@@ -211,3 +211,42 @@ async def get_document_extraction(
         "field_confidence": extraction.field_confidence,
         "created_at": extraction.created_at,
     }
+
+
+@router.get("/{document_id}/validation")
+async def get_document_validation(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retrieves the programmatic validation results and failed rule details for a document."""
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    document = result.scalars().first()
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found."
+        )
+
+    # Enforce strict multi-tenant isolation
+    await get_current_organization_membership(
+        organization_id=document.organization_id, db=db, current_user=current_user
+    )
+
+    from app.models.validation_result import ValidationResult
+    val_result = await db.execute(
+        select(ValidationResult).where(ValidationResult.document_id == document_id)
+    )
+    validation = val_result.scalars().first()
+    if not validation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Validation results not found for this document."
+        )
+
+    return {
+        "document_id": validation.document_id,
+        "is_valid": validation.is_valid,
+        "validation_errors": validation.validation_errors,
+        "created_at": validation.created_at,
+    }

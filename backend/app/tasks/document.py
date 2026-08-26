@@ -177,15 +177,80 @@ def process_document_task(self, document_id: str) -> str:
                         except Exception as clean_err:
                             logger.warning(f"Failed to delete temp page image {tmp_path}: {str(clean_err)}")
 
-            # --- Future Pipeline Steps (Placeholder) -------------
-            # Phase 5: Schema & Math Validation
-            # -----------------------------------------------------
-
-            # Temporary completion flag for Phase 4 slice
-            document.status = "COMPLETED"
+            # 7. Update status: EXTRACTION_COMPLETE -> VALIDATING
+            document.status = "VALIDATING"
             db.commit()
-            logger.info(f"Document {document_id} successfully completed pipeline.")
-            return f"Successfully processed document {document_id}"
+
+            # Execute Deterministic Validations
+            from app.services.validation import InvoiceValidationEngine
+            from app.models.validation_result import ValidationResult
+            
+            validation_output = InvoiceValidationEngine.validate(extracted_data)
+            
+            # Delete any existing validation results for idempotency
+            db.query(ValidationResult).filter(ValidationResult.document_id == doc_uuid).delete()
+            db.commit()
+            
+            # Save Validation Result
+            db_validation = ValidationResult(
+                document_id=doc_uuid,
+                is_valid=validation_output.is_valid,
+                validation_errors=[err.model_dump() for err in validation_output.errors]
+            )
+            db.add(db_validation)
+            db.commit()
+            
+            # Calculate OCR average confidence from pages
+            avg_ocr_confidence = 1.0
+            total_words = 0
+            sum_ocr_confidence = 0.0
+            
+            for page in db_pages:
+                if page.ocr_data and "lines" in page.ocr_data:
+                    for line in page.ocr_data["lines"]:
+                        if "words" in line:
+                            for word in line["words"]:
+                                confidence = word.get("confidence")
+                                if confidence is not None:
+                                    sum_ocr_confidence += confidence
+                                    total_words += 1
+                                    
+            if total_words > 0:
+                avg_ocr_confidence = sum_ocr_confidence / total_words
+            
+            # Execute Confidence Calculations
+            from app.services.confidence import ConfidenceEngine
+            
+            # Map initial confidence scores (defaulting to 0.95)
+            initial_scores = {field: 0.95 for field in extracted_dict.keys() if extracted_dict[field] is not None}
+            
+            confidence_result = ConfidenceEngine.calculate_confidence(
+                extracted_fields=extracted_dict,
+                model_confidence_scores=initial_scores,
+                validation_output=validation_output,
+                avg_ocr_confidence=avg_ocr_confidence
+            )
+            
+            # Update extraction results with calculated confidence values
+            db_extraction.field_confidence = confidence_result["field_confidence"]
+            db_extraction.raw_model_response = {
+                "source": "gemini-2.0-flash",
+                "document_confidence": confidence_result["document_confidence"],
+                "data": extracted_dict
+            }
+            db.commit()
+            
+            # 8. Set final status based on validation and confidence threshold
+            # Auto-review threshold: document_confidence < 0.85 OR validation.is_valid is False
+            if not validation_output.is_valid or confidence_result["document_confidence"] < 0.85:
+                document.status = "REVIEW_REQUIRED"
+                logger.info(f"Document {document_id} transitioned to REVIEW_REQUIRED. Valid: {validation_output.is_valid}, Confidence: {confidence_result['document_confidence']}")
+            else:
+                document.status = "COMPLETED"
+                logger.info(f"Document {document_id} successfully completed parsing pipeline.")
+                
+            db.commit()
+            return f"Processed document {document_id} with status: {document.status}"
             
         finally:
             # Cleanup temp file

@@ -52,7 +52,9 @@ async def test_upload_document_success(client: AsyncClient, db_session: AsyncSes
     import fitz
     pdf_doc = fitz.open()
     page = pdf_doc.new_page()
+    page.insert_text((50, 30), "Vendor: Acme Corp")
     page.insert_text((50, 50), "Invoice Number: INV-12345")
+    page.insert_text((50, 80), "Invoice Date: 2026-08-25")
     page.insert_text((50, 100), "Subtotal: 1000.00")
     page.insert_text((50, 120), "Tax: 150.00")
     page.insert_text((50, 140), "Total: 1150.00")
@@ -262,3 +264,106 @@ async def test_get_document_extraction_tenant_isolation(client: AsyncClient, db_
     # Enforces tenant isolation on extraction endpoint
     assert response.status_code == 403
     assert "not a member" in response.json()["detail"]
+
+
+async def test_validation_success_and_high_confidence(client: AsyncClient, db_session: AsyncSession):
+    # 1. Setup user and organization
+    user_data = await create_test_user_and_headers(client, "val_success@example.com")
+    org_id = await get_user_organization(db_session, user_data["user_id"])
+    
+    # 2. Generate a valid PDF with correct totals: 1000 subtotal + 100 tax = 1100 total
+    import fitz
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page()
+    page.insert_text((50, 50), "Vendor: Acme Corp")
+    page.insert_text((50, 100), "Invoice Number: INV-001")
+    page.insert_text((50, 120), "Invoice Date: 2026-08-25")
+    page.insert_text((50, 140), "Subtotal: 1000.00")
+    page.insert_text((50, 160), "Tax: 100.00")
+    page.insert_text((50, 180), "Total: 1100.00")
+    file_content = pdf_doc.write()
+    pdf_doc.close()
+    
+    # 3. Upload file
+    files = {"file": ("val_success.pdf", file_content, "application/pdf")}
+    upload_res = await client.post(
+        f"/api/v1/documents?organization_id={org_id}",
+        files=files,
+        headers=user_data["headers"]
+    )
+    doc_id = upload_res.json()["document_id"]
+    
+    # 4. Fetch validation result
+    response = await client.get(
+        f"/api/v1/documents/{doc_id}/validation",
+        headers=user_data["headers"]
+    )
+    assert response.status_code == 200
+    data = response.json()
+    print("VALIDATION ERRORS:", data["validation_errors"])
+    assert data["is_valid"] is True
+    assert len(data["validation_errors"]) == 0
+    
+    # 5. Fetch document metadata to verify COMPLETED status (because it passed validations and had high confidence)
+    doc_res = await client.get(
+        f"/api/v1/documents/{doc_id}",
+        headers=user_data["headers"]
+    )
+    assert doc_res.status_code == 200
+    assert doc_res.json()["status"] == "COMPLETED"
+
+
+async def test_validation_failure_and_review_required(client: AsyncClient, db_session: AsyncSession):
+    # 1. Setup user and organization
+    user_data = await create_test_user_and_headers(client, "val_failure@example.com")
+    org_id = await get_user_organization(db_session, user_data["user_id"])
+    
+    # 2. Generate a mathematically incorrect PDF: 1000 subtotal + 100 tax != 1500 total
+    import fitz
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page()
+    page.insert_text((50, 50), "Vendor: Acme Corp")
+    page.insert_text((50, 100), "Invoice Number: INV-002")
+    page.insert_text((50, 120), "Invoice Date: 2026-08-25")
+    page.insert_text((50, 140), "Subtotal: 1000.00")
+    page.insert_text((50, 160), "Tax: 100.00")
+    page.insert_text((50, 180), "Total: 1500.00")
+    file_content = pdf_doc.write()
+    pdf_doc.close()
+    
+    # 3. Upload file
+    files = {"file": ("val_failure.pdf", file_content, "application/pdf")}
+    upload_res = await client.post(
+        f"/api/v1/documents?organization_id={org_id}",
+        files=files,
+        headers=user_data["headers"]
+    )
+    doc_id = upload_res.json()["document_id"]
+    
+    # 4. Fetch validation result
+    response = await client.get(
+        f"/api/v1/documents/{doc_id}/validation",
+        headers=user_data["headers"]
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["is_valid"] is False
+    assert len(data["validation_errors"]) == 1
+    assert data["validation_errors"][0]["rule_name"] == "ARITHMETIC_TOTAL_MISMATCH"
+    
+    # 5. Fetch document metadata to verify status is REVIEW_REQUIRED (due to validation math failure)
+    doc_res = await client.get(
+        f"/api/v1/documents/{doc_id}",
+        headers=user_data["headers"]
+    )
+    assert doc_res.status_code == 200
+    assert doc_res.json()["status"] == "REVIEW_REQUIRED"
+
+    # 6. Fetch extraction to verify confidence ratings were deducted
+    ext_res = await client.get(
+        f"/api/v1/documents/{doc_id}/extraction",
+        headers=user_data["headers"]
+    )
+    ext_data = ext_res.json()
+    # Initial 0.95 - 0.40 arithmetic deduction = 0.55 confidence score for total fields
+    assert ext_data["field_confidence"]["total_amount"] == 0.55
