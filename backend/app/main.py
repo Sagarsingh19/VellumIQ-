@@ -28,6 +28,14 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 
 
+@app.on_event("startup")
+async def on_startup():
+    from app.models import Base
+    from app.core.database import engine
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
 @app.get("/")
 def root():
     return {"message": "Welcome to Multi-Modal Document Intelligence SaaS API"}
