@@ -4,12 +4,13 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.models.user import User
 from app.models.organization import Organization
 from app.models.membership import Membership
-from app.schemas.auth import UserCreate, UserResponse, Token
+from app.schemas.auth import UserCreate, UserResponse, Token, LoginResponse
 
 router = APIRouter()
 
@@ -48,7 +49,7 @@ async def signup(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     return new_user
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=LoginResponse)
 async def login(
     form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)
 ):
@@ -61,5 +62,18 @@ async def login(
             detail="Incorrect email or password",
         )
 
+    # Query organization memberships
+    mem_result = await db.execute(
+        select(Membership)
+        .where(Membership.user_id == user.id)
+        .options(selectinload(Membership.organization))
+    )
+    memberships = mem_result.scalars().all()
+
     access_token = create_access_token(subject=user.id)
-    return Token(access_token=access_token)
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user,
+        "memberships": memberships
+    }

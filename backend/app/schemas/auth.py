@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 from pydantic import BaseModel, EmailStr, Field
 
@@ -25,3 +25,32 @@ class Token(BaseModel):
 
 class TokenPayload(BaseModel):
     sub: Optional[str] = None
+
+
+class OrganizationOut(BaseModel):
+    id: UUID
+    name: str
+    plan_tier: str
+    monthly_page_limit: int
+    subscription_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class MembershipOut(BaseModel):
+    id: UUID
+    organization_id: UUID
+    user_id: UUID
+    role: str
+    organization: OrganizationOut
+
+    class Config:
+        from_attributes = True
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+    memberships: List[MembershipOut]
