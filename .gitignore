@@ -1,0 +1,34 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Storage and Databases
+storage_local/
+test_db.db
+test_db.db-journal
+test_db.db-wal
+doc_intel.db
+doc_intel.db-journal
+doc_intel.db-wal
+
+# Sensitive configurations
+.env
+
+# IDE / System configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
