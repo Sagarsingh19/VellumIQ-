@@ -73,5 +73,9 @@ class Settings(BaseSettings):
     # AI Model Providers
     GEMINI_API_KEY: Optional[str] = None
 
+    # Stripe Billing
+    STRIPE_SECRET_KEY: str = "sk_test_mock"
+    STRIPE_WEBHOOK_SECRET: str = "whsec_mock"
+
 
 settings = Settings()

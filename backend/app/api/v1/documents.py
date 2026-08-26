@@ -1,8 +1,8 @@
 import logging
 import os
 import uuid
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Security, status
 from fastapi.responses import FileResponse
 
 logger = logging.getLogger(__name__)
@@ -12,7 +12,14 @@ from sqlalchemy.future import select
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.storage import storage_client
-from app.api.deps import get_current_user, get_current_organization_membership
+from app.api.deps import (
+    get_current_user,
+    get_current_organization_membership,
+    verify_tenant_access,
+    get_current_user_optional,
+    api_key_header,
+    api_key_query
+)
 from app.models.user import User
 from app.models.document import Document
 from app.models.membership import Membership
@@ -36,13 +43,20 @@ async def upload_document(
     organization_id: uuid.UUID = Query(..., description="Organization context ID"),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    authenticated_org_id: uuid.UUID = Depends(verify_tenant_access),
+    current_user: Optional[User] = Depends(get_current_user_optional),
 ):
     """Uploads a document to object storage, registers metadata, and queues parsing task."""
-    # 1. Authorize user has membership in target organization
-    await get_current_organization_membership(
-        organization_id=organization_id, db=db, current_user=current_user
-    )
+    # verify_tenant_access dependency verifies EITHER valid active API Key OR User Org membership
+
+    # 1.5 Check subscription page quota
+    from app.services.usage import check_quota_async
+    has_quota = await check_quota_async(db, organization_id, incoming_pages=1)
+    if not has_quota:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="Organization monthly page processing limit reached. Upgrade subscription."
+        )
 
     # 2. File validation checks
     # Size check
@@ -88,7 +102,7 @@ async def upload_document(
     db_document = Document(
         id=doc_id,
         organization_id=organization_id,
-        uploaded_by_id=current_user.id,
+        uploaded_by_id=current_user.id if current_user else None,
         original_filename=file.filename,
         storage_path=object_name,
         mime_type=file.content_type,
@@ -114,7 +128,9 @@ async def upload_document(
 async def get_document(
     document_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    api_key_hdr: Optional[str] = Security(api_key_header),
+    api_key_qry: Optional[str] = Security(api_key_query),
 ):
     """Retrieves metadata and current processing status for a document."""
     result = await db.execute(select(Document).where(Document.id == document_id))
@@ -126,8 +142,12 @@ async def get_document(
         )
 
     # Enforce strict multi-tenant isolation
-    await get_current_organization_membership(
-        organization_id=document.organization_id, db=db, current_user=current_user
+    await verify_tenant_access(
+        organization_id=document.organization_id,
+        api_key_hdr=api_key_hdr,
+        api_key_qry=api_key_qry,
+        current_user=current_user,
+        db=db
     )
 
     # Get temporary pre-signed URL to view file
@@ -182,7 +202,9 @@ async def get_local_file(
 async def get_document_extraction(
     document_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    api_key_hdr: Optional[str] = Security(api_key_header),
+    api_key_qry: Optional[str] = Security(api_key_query),
 ):
     """Retrieves the extracted fields and confidence scores for a document."""
     result = await db.execute(select(Document).where(Document.id == document_id))
@@ -194,8 +216,12 @@ async def get_document_extraction(
         )
 
     # Enforce strict multi-tenant isolation
-    await get_current_organization_membership(
-        organization_id=document.organization_id, db=db, current_user=current_user
+    await verify_tenant_access(
+        organization_id=document.organization_id,
+        api_key_hdr=api_key_hdr,
+        api_key_qry=api_key_qry,
+        current_user=current_user,
+        db=db
     )
 
     from app.models.extraction_result import ExtractionResult
@@ -221,7 +247,9 @@ async def get_document_extraction(
 async def get_document_validation(
     document_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    api_key_hdr: Optional[str] = Security(api_key_header),
+    api_key_qry: Optional[str] = Security(api_key_query),
 ):
     """Retrieves the programmatic validation results and failed rule details for a document."""
     result = await db.execute(select(Document).where(Document.id == document_id))
@@ -233,8 +261,12 @@ async def get_document_validation(
         )
 
     # Enforce strict multi-tenant isolation
-    await get_current_organization_membership(
-        organization_id=document.organization_id, db=db, current_user=current_user
+    await verify_tenant_access(
+        organization_id=document.organization_id,
+        api_key_hdr=api_key_hdr,
+        api_key_qry=api_key_qry,
+        current_user=current_user,
+        db=db
     )
 
     from app.models.validation_result import ValidationResult

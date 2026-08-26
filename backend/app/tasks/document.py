@@ -167,6 +167,20 @@ def process_document_task(self, document_id: str) -> str:
                 document.status = "EXTRACTION_COMPLETE"
                 db.commit()
                 logger.info(f"VLM Extraction complete for document {document_id}")
+
+                # Log usage events for accounting/billing
+                from app.services.usage import UsageTracker
+                UsageTracker.log_ocr_pages(
+                    db=db,
+                    organization_id=org_id,
+                    user_id=document.uploaded_by_id,
+                    page_count=document.page_count
+                )
+                UsageTracker.log_vlm_extraction(
+                    db=db,
+                    organization_id=org_id,
+                    user_id=document.uploaded_by_id
+                )
                 
             finally:
                 # Cleanup downloaded temp cloud images

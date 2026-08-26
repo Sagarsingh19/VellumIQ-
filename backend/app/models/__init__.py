@@ -9,6 +9,7 @@ from app.models.validation_result import ValidationResult
 from app.models.review import Review
 from app.models.audit_log import AuditLog
 from app.models.usage_event import UsageEvent
+from app.models.api_key import ApiKey
 
 __all__ = [
     "Base",
@@ -22,4 +23,5 @@ __all__ = [
     "Review",
     "AuditLog",
     "UsageEvent",
+    "ApiKey",
 ]
