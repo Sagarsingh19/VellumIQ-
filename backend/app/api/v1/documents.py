@@ -172,3 +172,42 @@ async def get_local_file(
         )
 
     return FileResponse(full_path)
+
+
+@router.get("/{document_id}/extraction")
+async def get_document_extraction(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retrieves the extracted fields and confidence scores for a document."""
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    document = result.scalars().first()
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found."
+        )
+
+    # Enforce strict multi-tenant isolation
+    await get_current_organization_membership(
+        organization_id=document.organization_id, db=db, current_user=current_user
+    )
+
+    from app.models.extraction_result import ExtractionResult
+    ext_result = await db.execute(
+        select(ExtractionResult).where(ExtractionResult.document_id == document_id)
+    )
+    extraction = ext_result.scalars().first()
+    if not extraction:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Extraction results not found for this document."
+        )
+
+    return {
+        "document_id": extraction.document_id,
+        "extracted_fields": extraction.extracted_fields,
+        "field_confidence": extraction.field_confidence,
+        "created_at": extraction.created_at,
+    }

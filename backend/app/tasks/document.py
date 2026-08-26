@@ -6,6 +6,7 @@ import uuid
 import fitz  # PyMuPDF
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.celery_app import celery_app
 from app.core.database import sync_session_maker
 from app.core.storage import storage_client
@@ -104,13 +105,83 @@ def process_document_task(self, document_id: str) -> str:
             document.page_count = len(ocr_result.pages)
             db.commit()
             logger.info(f"OCR stage complete for {document_id}. Total pages: {document.page_count}")
+
+            # 6. Update status: OCR_COMPLETE -> EXTRACTION_PROCESSING
+            document.status = "EXTRACTION_PROCESSING"
+            db.commit()
+
+            # Retrieve DocumentPage metadata to assemble image paths and text
+            db_pages = db.query(DocumentPage).filter(DocumentPage.document_id == doc_uuid).order_by(DocumentPage.page_number).all()
             
+            full_ocr_text = "\n".join(page.ocr_data["text"] for page in db_pages if page.ocr_data and "text" in page.ocr_data)
+            
+            # Resolve local image paths for the VLM input
+            page_image_local_paths = []
+            temp_image_files = []
+            
+            try:
+                for page in db_pages:
+                    if settings.STORAGE_BACKEND == "local":
+                        # Direct local path
+                        local_path = os.path.join("storage_local", page.image_storage_path)
+                        page_image_local_paths.append(local_path)
+                    else:
+                        # Cloud storage: download to temporary local file
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_img:
+                            tmp_path = tmp_img.name
+                        storage_client.download_file(page.image_storage_path, tmp_path)
+                        page_image_local_paths.append(tmp_path)
+                        temp_image_files.append(tmp_path)
+                
+                # Execute Gemini VLM Structured Extraction
+                from app.services.vlm.gemini_vlm import GeminiVLMExtractor
+                from app.schemas.invoice import InvoiceExtractionSchema
+                from app.models.extraction_result import ExtractionResult
+                
+                vlm_extractor = GeminiVLMExtractor()
+                extracted_data = vlm_extractor.extract_structured_data(
+                    image_paths=page_image_local_paths,
+                    ocr_text=full_ocr_text,
+                    schema_class=InvoiceExtractionSchema
+                )
+                
+                # Delete any existing extraction result for idempotency
+                db.query(ExtractionResult).filter(ExtractionResult.document_id == doc_uuid).delete()
+                db.commit()
+                
+                # Setup basic initial confidence scores (stubbing for Phase 5)
+                # Map each extracted field to 0.95 confidence score
+                extracted_dict = extracted_data.model_dump(mode="json")
+                confidence_scores = {field: 0.95 for field in extracted_dict.keys() if extracted_dict[field] is not None}
+                
+                # Store Extraction Result
+                db_extraction = ExtractionResult(
+                    document_id=doc_uuid,
+                    extracted_fields=extracted_dict,
+                    field_confidence=confidence_scores,
+                    raw_model_response={"source": "gemini-2.0-flash", "data": extracted_dict}
+                )
+                db.add(db_extraction)
+                
+                # Update status: EXTRACTION_PROCESSING -> EXTRACTION_COMPLETE
+                document.status = "EXTRACTION_COMPLETE"
+                db.commit()
+                logger.info(f"VLM Extraction complete for document {document_id}")
+                
+            finally:
+                # Cleanup downloaded temp cloud images
+                for tmp_path in temp_image_files:
+                    if os.path.exists(tmp_path):
+                        try:
+                            os.remove(tmp_path)
+                        except Exception as clean_err:
+                            logger.warning(f"Failed to delete temp page image {tmp_path}: {str(clean_err)}")
+
             # --- Future Pipeline Steps (Placeholder) -------------
-            # Phase 4: VLM Extraction
             # Phase 5: Schema & Math Validation
             # -----------------------------------------------------
 
-            # Temporary completion flag for Phase 3 slice
+            # Temporary completion flag for Phase 4 slice
             document.status = "COMPLETED"
             db.commit()
             logger.info(f"Document {document_id} successfully completed pipeline.")

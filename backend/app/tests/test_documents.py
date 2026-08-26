@@ -182,3 +182,83 @@ async def test_get_document_tenant_isolation(client: AsyncClient, db_session: As
     # Enforces tenant isolation
     assert response.status_code == 403
     assert "not a member" in response.json()["detail"]
+
+
+async def test_get_document_extraction_success(client: AsyncClient, db_session: AsyncSession):
+    # 1. Setup user and organization
+    user_data = await create_test_user_and_headers(client, "extraction_viewer@example.com")
+    org_id = await get_user_organization(db_session, user_data["user_id"])
+    
+    # 2. Generate a valid PDF with specific details
+    import fitz
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page()
+    page.insert_text((50, 50), "Vendor: VLM Consulting Group")
+    page.insert_text((50, 100), "Invoice Number: INV-98765-ABC")
+    page.insert_text((50, 120), "Subtotal: 2500.00")
+    page.insert_text((50, 140), "Tax: 250.00")
+    page.insert_text((50, 160), "Total Due: 2750.00")
+    file_content = pdf_doc.write()
+    pdf_doc.close()
+    
+    # 3. Upload file
+    files = {"file": ("vlm_invoice.pdf", file_content, "application/pdf")}
+    upload_res = await client.post(
+        f"/api/v1/documents?organization_id={org_id}",
+        files=files,
+        headers=user_data["headers"]
+    )
+    assert upload_res.status_code == 202
+    doc_id = upload_res.json()["document_id"]
+    
+    # 4. Fetch extraction results
+    response = await client.get(
+        f"/api/v1/documents/{doc_id}/extraction",
+        headers=user_data["headers"]
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["document_id"] == doc_id
+    
+    # Assert extracted values match the input text layer from the PDF!
+    fields = data["extracted_fields"]
+    assert fields["invoice_number"] == "INV-98765-ABC"
+    assert fields["vendor_name"] == "VLM Consulting Group"
+    assert fields["subtotal"] == 2500.0
+    assert fields["tax_amount"] == 250.0
+    assert fields["total_amount"] == 2750.0
+    
+    # Assert field confidence exists
+    assert data["field_confidence"]["invoice_number"] == 0.95
+
+
+async def test_get_document_extraction_tenant_isolation(client: AsyncClient, db_session: AsyncSession):
+    # User A uploads a document
+    user_a = await create_test_user_and_headers(client, "usera_ext@example.com")
+    org_a = await get_user_organization(db_session, user_a["user_id"])
+    
+    import fitz
+    pdf_doc = fitz.open()
+    page = pdf_doc.new_page()
+    page.insert_text((50, 50), "Invoice Number: INV-1")
+    file_content = pdf_doc.write()
+    pdf_doc.close()
+    
+    files = {"file": ("usera_inv.pdf", file_content, "application/pdf")}
+    upload_res = await client.post(
+        f"/api/v1/documents?organization_id={org_a}",
+        files=files,
+        headers=user_a["headers"]
+    )
+    doc_id = upload_res.json()["document_id"]
+    
+    # User B logs in and tries to fetch User A's extraction results
+    user_b = await create_test_user_and_headers(client, "userb_ext@example.com")
+    
+    response = await client.get(
+        f"/api/v1/documents/{doc_id}/extraction",
+        headers=user_b["headers"]
+    )
+    # Enforces tenant isolation on extraction endpoint
+    assert response.status_code == 403
+    assert "not a member" in response.json()["detail"]
