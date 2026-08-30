@@ -35,6 +35,9 @@ ALLOWED_MIME_TYPES = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
     "image/jpg": ".jpg",
+    "text/csv": ".csv",
+    "application/vnd.ms-excel": ".csv",
+    "text/plain": ".csv",
 }
 
 
@@ -74,10 +77,11 @@ async def upload_document(
         )
 
     # Content Type check
-    if file.content_type not in ALLOWED_MIME_TYPES:
+    file_ext = os.path.splitext(file.filename or "")[1].lower()
+    if file.content_type not in ALLOWED_MIME_TYPES and file_ext != ".csv":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File type {file.content_type} not supported. Allowed formats: PDF, PNG, JPEG."
+            detail=f"File type {file.content_type} not supported. Allowed formats: PDF, PNG, JPEG, CSV."
         )
 
     # 3. Create document record

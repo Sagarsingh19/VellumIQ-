@@ -512,3 +512,34 @@ async def test_document_human_review_tenant_isolation(client: AsyncClient, db_se
     # Enforces strict isolation checks
     assert response.status_code == 403
     assert "not a member" in response.json()["detail"]
+
+
+async def test_upload_csv_document_success(client: AsyncClient, db_session: AsyncSession):
+    # Setup user and organization
+    user_data = await create_test_user_and_headers(client, "csv_uploader@example.com")
+    org_id = await get_user_organization(db_session, user_data["user_id"])
+
+    csv_content = (
+        "vendor,invoice_number,invoice_date,subtotal,tax,discount,total\n"
+        "Acme Corp,INV-CSV-100,2026-08-30,1000.00,100.00,50.00,1050.00\n"
+    ).encode("utf-8")
+
+    files = {"file": ("dataset_invoice.csv", csv_content, "text/csv")}
+    upload_res = await client.post(
+        f"/api/v1/documents?organization_id={org_id}",
+        files=files,
+        headers=user_data["headers"]
+    )
+    assert upload_res.status_code == 202
+    doc_id = upload_res.json()["document_id"]
+
+    # Verify document processing and extraction state
+    get_res = await client.get(
+        f"/api/v1/documents/{doc_id}",
+        headers=user_data["headers"]
+    )
+    assert get_res.status_code == 200
+    doc_data = get_res.json()
+    assert doc_data["status"] == "COMPLETED"
+    assert doc_data.get("overall_confidence", 1.0) >= 0.85
+

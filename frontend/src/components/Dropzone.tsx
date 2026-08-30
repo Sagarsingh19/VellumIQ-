@@ -82,7 +82,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({ organizationId, onUploadSucc
           ref={fileInputRef}
           onChange={handleFileInput}
           className="hidden"
-          accept=".pdf,.png,.jpg,.jpeg"
+          accept=".pdf,.png,.jpg,.jpeg,.csv"
           disabled={loading}
         />
         
@@ -100,7 +100,7 @@ export const Dropzone: React.FC<DropzoneProps> = ({ organizationId, onUploadSucc
               Drag & Drop your invoice file here
             </p>
             <p className="text-slate-500 text-sm mb-2">
-              Supports PDF, PNG, or JPEG formats up to 10MB
+              Supports PDF, PNG, JPEG, or CSV formats up to 10MB
             </p>
             <button
               type="button"

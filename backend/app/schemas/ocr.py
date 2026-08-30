@@ -29,3 +29,4 @@ class OCRPage(BaseModel):
 
 class OCRResult(BaseModel):
     pages: List[OCRPage] = Field(..., description="List of pages processed")
+    extracted_fields: Optional[dict] = Field(default=None, description="Optional extracted fields dictionary for structured formats like CSV")

@@ -54,8 +54,12 @@ def process_document_task(self, document_id: str) -> str:
             document.status = "OCR_PROCESSING"
             db.commit()
             
-            # Extract text & coordinates using pdfplumber OCR engine
-            ocr_engine = PDFPlumberOCREngine()
+            # Extract text & coordinates using OCR or CSV Parser engine
+            if ext == ".csv":
+                from app.services.ocr.csv_ocr import CSVParserEngine
+                ocr_engine = CSVParserEngine()
+            else:
+                ocr_engine = PDFPlumberOCREngine()
             ocr_result = ocr_engine.extract_text(temp_file_path)
             
             # 4. Rasterize pages to PNG and upload to storage, then write page metadata
@@ -133,17 +137,21 @@ def process_document_task(self, document_id: str) -> str:
                         page_image_local_paths.append(tmp_path)
                         temp_image_files.append(tmp_path)
                 
-                # Execute Gemini VLM Structured Extraction
-                from app.services.vlm.gemini_vlm import GeminiVLMExtractor
+                # Execute Extraction (CSV Direct Schema Population or Gemini VLM)
                 from app.schemas.invoice import InvoiceExtractionSchema
                 from app.models.extraction_result import ExtractionResult
                 
-                vlm_extractor = GeminiVLMExtractor()
-                extracted_data = vlm_extractor.extract_structured_data(
-                    image_paths=page_image_local_paths,
-                    ocr_text=full_ocr_text,
-                    schema_class=InvoiceExtractionSchema
-                )
+                if ext == ".csv" and getattr(ocr_result, "extracted_fields", None) is not None:
+                    raw_csv_fields = ocr_result.extracted_fields
+                    extracted_data = InvoiceExtractionSchema(**raw_csv_fields)
+                else:
+                    from app.services.vlm.gemini_vlm import GeminiVLMExtractor
+                    vlm_extractor = GeminiVLMExtractor()
+                    extracted_data = vlm_extractor.extract_structured_data(
+                        image_paths=page_image_local_paths,
+                        ocr_text=full_ocr_text,
+                        schema_class=InvoiceExtractionSchema
+                    )
                 
                 # Delete any existing extraction result for idempotency
                 db.query(ExtractionResult).filter(ExtractionResult.document_id == doc_uuid).delete()
