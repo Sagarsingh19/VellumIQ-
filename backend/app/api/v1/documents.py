@@ -128,6 +128,38 @@ async def upload_document(
     }
 
 
+@router.get("", response_model=List[dict])
+async def list_documents(
+    organization_id: uuid.UUID = Query(..., description="Organization context ID"),
+    db: AsyncSession = Depends(get_db),
+    authenticated_org_id: uuid.UUID = Depends(verify_tenant_access),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    """Lists all documents for the given organization context."""
+    result = await db.execute(
+        select(Document)
+        .where(Document.organization_id == organization_id)
+        .order_by(Document.created_at.desc())
+    )
+    docs = result.scalars().all()
+
+    return [
+        {
+            "id": d.id,
+            "organization_id": d.organization_id,
+            "filename": d.original_filename,
+            "original_filename": d.original_filename,
+            "status": d.status,
+            "mime_type": d.mime_type,
+            "file_size": d.file_size,
+            "page_count": d.page_count,
+            "created_at": d.created_at,
+            "updated_at": d.updated_at,
+        }
+        for d in docs
+    ]
+
+
 @router.get("/{document_id}")
 async def get_document(
     document_id: uuid.UUID,
