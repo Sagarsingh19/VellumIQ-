@@ -73,54 +73,7 @@ export default function SettingsPage() {
   };
 
   const handleUpgrade = async (plan: string) => {
-    if (!activeOrganization) return;
-    setIsRedirectingBilling(plan);
-    try {
-      const session = await billingService.createCheckoutSession(activeOrganization.id, plan);
-      
-      if (session.mock) {
-        alert(`[Test Mode Upgrade Alert] Simulating Stripe payment completion for organization. Click OK to upgrade subscription to ${plan}!`);
-        
-        // Trigger the webhook locally using mock session data to simulate immediate Stripe upgrade
-        const response = await fetch("/api/v1/billing/webhook", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            type: "checkout.session.completed",
-            data: {
-              object: {
-                customer: `cus_mock_${activeOrganization.id.substring(0,6)}`,
-                subscription: `sub_mock_${activeOrganization.id.substring(0,6)}`,
-                metadata: {
-                  organization_id: activeOrganization.id,
-                  plan_tier: plan
-                }
-              }
-            }
-          })
-        });
-        
-        if (response.ok) {
-          // Update client activeOrganization state
-          updateOrganizationState({
-            ...activeOrganization,
-            plan_tier: plan as any,
-            monthly_page_limit: plan === "GROWTH" ? 1000 : 10000
-          });
-          alert(`Successfully upgraded to ${plan} Plan! Your quota limits have been expanded.`);
-        }
-      } else {
-        // Redirection for live price integrations
-        window.location.href = session.checkout_url;
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Failed to initiate billing session.");
-    } finally {
-      setIsRedirectingBilling(null);
-    }
+    alert(`Paid plan upgrades are restricted. This workspace is locked to the Free Starter Plan ($0/month).`);
   };
 
   return (

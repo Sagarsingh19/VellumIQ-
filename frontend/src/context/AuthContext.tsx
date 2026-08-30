@@ -36,7 +36,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Let's retrieve organization meta saved during login.
         const orgMeta = localStorage.getItem("active_org");
         const memberMeta = localStorage.getItem("active_membership");
-        if (orgMeta) setActiveOrganization(JSON.parse(orgMeta));
+        if (orgMeta) {
+          const parsedOrg = JSON.parse(orgMeta);
+          parsedOrg.plan_tier = "FREE";
+          parsedOrg.monthly_page_limit = 100;
+          setActiveOrganization(parsedOrg);
+        }
         if (memberMeta) setActiveMembership(JSON.parse(memberMeta));
       } catch (e) {
         console.error("Failed to restore session", e);
