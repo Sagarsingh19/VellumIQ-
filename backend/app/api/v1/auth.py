@@ -34,7 +34,8 @@ async def signup(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     await db.flush()  # Flush to get the new_user.id
 
     # Create default organization
-    default_org = Organization(name=f"{user_in.email.split('@')[0]}'s Org")
+    org_name = user_in.organization_name or f"{user_in.email.split('@')[0]}'s Org"
+    default_org = Organization(name=org_name)
     db.add(default_org)
     await db.flush()  # Flush to get default_org.id
 
