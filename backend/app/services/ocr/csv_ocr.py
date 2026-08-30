@@ -68,14 +68,29 @@ class CSVParserEngine:
         if inv_num:
             extracted_fields["invoice_number"] = inv_num
 
+        # Safe Date Parser
+        def parse_date(val: Any) -> Any:
+            if not val:
+                return None
+            val_str = str(val).strip()
+            from datetime import datetime
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y", "%b %d, %Y"):
+                try:
+                    return datetime.strptime(val_str, fmt).date().isoformat()
+                except ValueError:
+                    pass
+            return None
+
         # Dates
         inv_date = find_val(["invoice_date", "date", "bill_date"])
-        if inv_date:
-            extracted_fields["invoice_date"] = inv_date
+        parsed_inv_date = parse_date(inv_date)
+        if parsed_inv_date:
+            extracted_fields["invoice_date"] = parsed_inv_date
 
         due_date = find_val(["due_date", "due"])
-        if due_date:
-            extracted_fields["due_date"] = due_date
+        parsed_due_date = parse_date(due_date)
+        if parsed_due_date:
+            extracted_fields["due_date"] = parsed_due_date
 
         # Financial Totals helper
         def parse_float(val: Any) -> float:

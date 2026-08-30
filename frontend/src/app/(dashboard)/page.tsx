@@ -222,7 +222,9 @@ export default function DashboardPage() {
                   <td className="p-4">{renderStatusBadge(doc.status)}</td>
                   <td className="p-4 font-mono font-medium">{doc.page_count || "-"}</td>
                   <td className="p-4 text-slate-500">{(doc.file_size / (1024 * 1024)).toFixed(2)} MB</td>
-                  <td className="p-4 text-slate-500">{new Date(doc.uploaded_at).toLocaleString()}</td>
+                  <td className="p-4 text-slate-500">
+                    {doc.created_at ? new Date(doc.created_at).toLocaleString() : "Just now"}
+                  </td>
                   <td className="p-4 pr-6 text-right">
                     {doc.status === "REVIEW_REQUIRED" ? (
                       <Link
