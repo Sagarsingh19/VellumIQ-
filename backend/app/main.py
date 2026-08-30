@@ -7,6 +7,10 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.api.v1.router import api_router
 
+from app.core.logging_config import setup_logging
+
+setup_logging()
+
 app = FastAPI(
     title="Multi-Modal Document Intelligence SaaS API",
     version="1.0.0",
@@ -43,11 +47,16 @@ def root():
 
 @app.get("/health", tags=["health"])
 async def health_check(db: AsyncSession = Depends(get_db)):
-    """Health check endpoint validating database connectivity."""
+    """Production health check endpoint validating database connectivity and system state."""
     try:
-        # Run a simple query to assert the DB is up
         await db.execute(text("SELECT 1"))
-        return {"status": "healthy", "database": "connected"}
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "database_provider": settings.DATABASE_PROVIDER,
+            "storage_backend": settings.STORAGE_BACKEND,
+            "version": "1.0.0"
+        }
     except Exception as e:
         raise HTTPException(
             status_code=503,
