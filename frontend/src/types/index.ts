@@ -48,6 +48,7 @@ export interface Document {
   file_size: number;
   page_count: number;
   uploaded_at: string;
+  created_at?: string;
   pages?: DocumentPage[];
 }
 
